@@ -1,7 +1,5 @@
-# joiner.py
-# Runtime: Python 3.11
-# Deps: pip install requests
-# Usage: python joiner.py
+# language: Python 3.11, file: joiner.py, runtime: Railway
+# pip install requests
 
 import json
 import os
@@ -13,7 +11,6 @@ import logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 log = logging.getLogger("joiner")
 
-CONFIG_FILE = "config.json"
 HCAPTCHA_SITEKEY = "4c672d35-0701-42b2-88c3-78380b0db560"
 HCAPTCHA_PAGE    = "https://discord.com/invite/"
 
@@ -24,20 +21,25 @@ HEADERS_BASE = {
 }
 
 def load_config() -> dict:
-    if not os.path.exists(CONFIG_FILE):
-        default = {
-            "tokens": ["TOKEN_1_HERE", "TOKEN_2_HERE"],
-            "invite": "discord.gg/INVITE_HERE",
-            "nopecha_key": "5pu6mp5bv78ls1nw",
-            "delay": 3,
-            "proxy": "http://mhqstncz:dx2i0l314kx3@45.38.107.97:6014/"
+    tokens_env = os.environ.get("TOKENS")
+    if tokens_env:
+        try:
+            parsed = json.loads(tokens_env)
+            tokens = parsed if isinstance(parsed, list) else [parsed]
+        except json.JSONDecodeError:
+            tokens = [tokens_env.strip()]
+        return {
+            "tokens":      tokens,
+            "invite":      os.environ.get("INVITE", ""),
+            "nopecha_key": os.environ.get("NOPECHA_KEY", ""),
+            "delay":       float(os.environ.get("DELAY", "3")),
+            "proxy":       os.environ.get("PROXY", "") or None,
         }
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(default, f, indent=2)
-        log.info("Created config.json — fill in tokens and invite then restart.")
-        exit(0)
-    with open(CONFIG_FILE) as f:
-        return json.load(f)
+    if os.path.exists("config.json"):
+        with open("config.json") as f:
+            return json.load(f)
+    log.error("No TOKENS env var and no config.json found.")
+    exit(1)
 
 def solve_hcaptcha(api_key: str, sitekey: str, url: str) -> str | None:
     log.info("Submitting captcha to nopecha...")
@@ -139,9 +141,9 @@ def main():
     proxy       = cfg.get("proxy") or None
 
     if not tokens:
-        log.error("No tokens in config.json"); return
+        log.error("No tokens found."); return
     if not invite:
-        log.error("No invite in config.json"); return
+        log.error("No invite found."); return
 
     invite_code = get_invite_code(invite)
     log.info(f"Invite: {invite_code} | Tokens: {len(tokens)} | Delay: {delay}s | Proxy: {proxy or 'none'}")
@@ -161,7 +163,7 @@ def main():
             log.warning(f"❌ Failed: {reason}")
         if i < len(tokens):
             wait = random.uniform(delay, delay * 4)
-            log.info(f"Waiting {wait:.1f}s before next join...")
+            log.info(f"Waiting {wait:.1f}s...")
             time.sleep(wait)
 
     log.info("─" * 40)
