@@ -11,7 +11,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 log = logging.getLogger("joiner")
 
-HCAPTCHA_SITEKEY = "4c672d35-0701-42b2-88c3-78380b0db560"
+HCAPTCHA_SITEKEY = "f5561ba9-8f1e-40ca-9b5b-a0b3f719ef34"
 HCAPTCHA_PAGE    = "https://discord.com/invite/"
 
 HEADERS_BASE = {
@@ -21,7 +21,7 @@ HEADERS_BASE = {
 }
 
 def load_config() -> dict:
-    tokens_env = os.environ.get("TOKENS")
+    tokens_env = os.environ.get("TOKEN") or os.environ.get("TOKENS")
     if tokens_env:
         try:
             parsed = json.loads(tokens_env)
@@ -38,22 +38,25 @@ def load_config() -> dict:
     if os.path.exists("config.json"):
         with open("config.json") as f:
             return json.load(f)
-    log.error("No TOKENS env var and no config.json found.")
+    log.error("No TOKEN env var and no config.json found.")
     exit(1)
 
 def solve_hcaptcha(api_key: str, sitekey: str, url: str) -> str | None:
-    log.info("Submitting captcha to nopecha...")
+    log.info(f"Submitting captcha — sitekey: {sitekey}")
     try:
         r = requests.post("https://api.nopecha.com/", json={
-            "key": api_key, "type": "hcaptcha",
-            "sitekey": sitekey, "url": url,
+            "key":     api_key,
+            "type":    "hcaptcha",
+            "sitekey": sitekey,
+            "url":     url,
         }, timeout=30)
         data = r.json()
+        log.info(f"NopeCha submit response: {data}")
         job_id = data.get("data")
         if not job_id:
-            log.error(f"Nopecha error: {data}")
+            log.error(f"NopeCha error: {data}")
             return None
-        for _ in range(24):
+        for attempt in range(24):
             time.sleep(5)
             poll = requests.get("https://api.nopecha.com/",
                 params={"key": api_key, "id": job_id}, timeout=15)
@@ -62,12 +65,12 @@ def solve_hcaptcha(api_key: str, sitekey: str, url: str) -> str | None:
             if token:
                 t = token[0] if isinstance(token, list) else token
                 if isinstance(t, str) and len(t) > 20:
-                    log.info("Captcha solved ✅")
+                    log.info(f"Captcha solved ✅ attempt {attempt + 1}")
                     return t
         log.warning("Captcha timed out.")
         return None
     except Exception as e:
-        log.error(f"Nopecha error: {e}")
+        log.error(f"NopeCha exception: {e}")
         return None
 
 def get_invite_code(invite: str) -> str:
@@ -82,11 +85,13 @@ def join_server(token: str, invite_code: str, nopecha_key: str, proxy: str | Non
     proxies = {"http": proxy, "https": proxy} if proxy else None
     headers = {**HEADERS_BASE, "Authorization": token}
 
-    for _ in range(3):
+    for attempt in range(3):
         r = requests.post(
             f"https://discord.com/api/v9/invites/{invite_code}",
             json={}, headers=headers, proxies=proxies, timeout=15,
         )
+
+        log.info(f"Discord response: {r.status_code} {r.text[:120]}")
 
         if r.status_code == 200:
             guild = r.json().get("guild", {})
@@ -101,9 +106,11 @@ def join_server(token: str, invite_code: str, nopecha_key: str, proxy: str | Non
         if r.status_code == 400:
             body = r.json()
             if "captcha_key" in body:
+                sitekey = body.get("captcha_sitekey", HCAPTCHA_SITEKEY)
+                log.info(f"Captcha required — sitekey from Discord: {sitekey}")
                 cap = solve_hcaptcha(
                     nopecha_key,
-                    body.get("captcha_sitekey", HCAPTCHA_SITEKEY),
+                    sitekey,
                     HCAPTCHA_PAGE + invite_code,
                 )
                 if not cap:
@@ -113,10 +120,12 @@ def join_server(token: str, invite_code: str, nopecha_key: str, proxy: str | Non
                     json={"captcha_key": cap},
                     headers=headers, proxies=proxies, timeout=15,
                 )
+                log.info(f"Post-captcha response: {r2.status_code} {r2.text[:120]}")
                 if r2.status_code == 200:
                     guild = r2.json().get("guild", {})
                     return True, guild.get("name", "unknown server")
                 return False, f"post-captcha failed: {r2.status_code} {r2.text[:80]}"
+            return False, f"bad request: {body}"
 
         if r.status_code == 401:
             return False, "token invalid/terminated"
